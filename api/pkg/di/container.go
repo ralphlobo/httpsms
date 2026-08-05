@@ -98,6 +98,18 @@ type Container struct {
 	inMemoryCache        cache.Cache
 }
 
+type readinessCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type readinessReport struct {
+	Status string           `json:"status"`
+	Checks []readinessCheck `json:"checks"`
+}
+
 // NewLiteContainer creates a Container without any routes or listeners
 func NewLiteContainer() (container *Container) {
 	return &Container{
@@ -179,6 +191,15 @@ func (container *Container) App() (app *fiber.App) {
 	app.Get("/health", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
+	app.Get("/ready", func(c fiber.Ctx) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		report := container.ReadinessReport(ctx)
+		if report.Status != "ok" {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(report)
+		}
+		return c.JSON(report)
+	})
 
 	app.Use(compress.New(compress.Config{
 		Level: compress.LevelBestCompression,
@@ -206,6 +227,152 @@ func (container *Container) App() (app *fiber.App) {
 
 	container.app = app
 	return app
+}
+
+func (container *Container) readinessDBCheck(ctx context.Context, name string, dsn string, existing *gorm.DB) readinessCheck {
+	check := readinessCheck{Name: name, Status: "ok"}
+	if strings.TrimSpace(dsn) == "" {
+		check.Status = "error"
+		check.Error = "missing DSN"
+		return check
+	}
+
+	db := existing
+	opened := false
+	if db == nil {
+		var err error
+		db, err = container.connect(dsn, &gorm.Config{TranslateError: true})
+		if err != nil {
+			check.Status = "error"
+			check.Error = err.Error()
+			return check
+		}
+		opened = true
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		check.Status = "error"
+		check.Error = err.Error()
+		return check
+	}
+	if opened {
+		defer sqlDB.Close()
+	}
+	if err = sqlDB.PingContext(ctx); err != nil {
+		check.Status = "error"
+		check.Error = err.Error()
+		return check
+	}
+	return check
+}
+
+func (container *Container) readinessRedisCheck(ctx context.Context) readinessCheck {
+	check := readinessCheck{Name: "redis", Status: "ok"}
+	redisURL := strings.TrimSpace(os.Getenv("REDIS_URL"))
+	if redisURL == "" {
+		check.Status = "error"
+		check.Error = "missing REDIS_URL"
+		return check
+	}
+	opt, err := redis.ParseURL(redisURL)
+	if err != nil {
+		check.Status = "error"
+		check.Error = err.Error()
+		return check
+	}
+	if strings.HasPrefix(redisURL, "rediss://") {
+		opt.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	client := redis.NewClient(opt)
+	defer client.Close()
+	if err = client.Ping(ctx).Err(); err != nil {
+		check.Status = "error"
+		check.Error = err.Error()
+		return check
+	}
+	return check
+}
+
+func (container *Container) readinessPhoneCheck(ctx context.Context, db *gorm.DB) readinessCheck {
+	check := readinessCheck{Name: "phone_heartbeat", Status: "skipped", Detail: "HTTPSMS_READY_OWNER is not configured"}
+	owner := strings.TrimSpace(os.Getenv("HTTPSMS_READY_OWNER"))
+	if owner == "" {
+		owner = strings.TrimSpace(os.Getenv("HTTPSMS_READY_PHONE"))
+	}
+	if owner == "" {
+		return check
+	}
+	check.Status = "ok"
+	check.Detail = ""
+	if db == nil {
+		check.Status = "error"
+		check.Error = "database unavailable for phone heartbeat check"
+		return check
+	}
+	maxAgeSeconds := int64(900)
+	if value := strings.TrimSpace(os.Getenv("HTTPSMS_READY_HEARTBEAT_MAX_AGE_SECONDS")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			check.Status = "error"
+			check.Error = "invalid HTTPSMS_READY_HEARTBEAT_MAX_AGE_SECONDS"
+			return check
+		}
+		maxAgeSeconds = parsed
+	}
+	var lastHeartbeat time.Time
+	if err := db.WithContext(ctx).
+		Raw("SELECT timestamp FROM heartbeats WHERE owner = ? ORDER BY timestamp DESC LIMIT 1", owner).
+		Scan(&lastHeartbeat).Error; err != nil {
+		check.Status = "error"
+		check.Error = err.Error()
+		return check
+	}
+	if lastHeartbeat.IsZero() {
+		check.Status = "error"
+		check.Error = fmt.Sprintf("no heartbeat found for owner %s", owner)
+		return check
+	}
+	age := time.Since(lastHeartbeat)
+	if age > time.Duration(maxAgeSeconds)*time.Second {
+		check.Status = "error"
+		check.Error = fmt.Sprintf("last heartbeat for owner %s is stale", owner)
+		check.Detail = lastHeartbeat.Format(time.RFC3339)
+		return check
+	}
+	check.Detail = lastHeartbeat.Format(time.RFC3339)
+	return check
+}
+
+// ReadinessReport checks runtime dependencies that /health intentionally skips.
+func (container *Container) ReadinessReport(ctx context.Context) readinessReport {
+	report := readinessReport{Status: "ok"}
+	primary := container.readinessDBCheck(ctx, "database", os.Getenv("DATABASE_URL"), container.db)
+	dedicated := container.readinessDBCheck(ctx, "dedicated_database", os.Getenv("DATABASE_URL_DEDICATED"), container.dedicatedDB)
+	redisCheck := container.readinessRedisCheck(ctx)
+	report.Checks = append(report.Checks, primary, dedicated, redisCheck)
+
+	var phoneDB *gorm.DB
+	if primary.Status == "ok" {
+		phoneDB = container.db
+		if phoneDB == nil {
+			phoneDB, _ = container.connect(os.Getenv("DATABASE_URL"), &gorm.Config{TranslateError: true})
+			if phoneDB != nil {
+				if sqlDB, err := phoneDB.DB(); err == nil {
+					defer sqlDB.Close()
+				}
+			}
+		}
+	}
+	report.Checks = append(report.Checks, container.readinessPhoneCheck(ctx, phoneDB))
+
+	for _, check := range report.Checks {
+		if check.Status == "error" {
+			report.Status = "unhealthy"
+			break
+		}
+	}
+	return report
 }
 
 // BearerAPIKeyMiddleware creates a new instance of middlewares.BearerAPIKeyAuth
