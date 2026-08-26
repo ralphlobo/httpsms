@@ -244,6 +244,11 @@ async function generateInvoice() {
   } catch (error: unknown) {
     if (error instanceof Map) {
       errorMessages.value = error
+    } else {
+      notificationsStore.addNotification({
+        message: 'We could not generate your invoice.',
+        type: 'error',
+      })
     }
   } finally {
     loading.value = false

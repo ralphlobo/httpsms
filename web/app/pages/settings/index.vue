@@ -675,7 +675,7 @@ async function saveSchedule() {
     await loadSendSchedules()
   } catch (error: unknown) {
     errorMessages.value = parseErrors(error)
-    if (errorMessages.value.size() != 0) {
+    if (errorMessages.value.size() === 0) {
       notificationsStore.addNotification({
         type: 'error',
         message: 'Failed to save send schedule',
