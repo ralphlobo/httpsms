@@ -296,7 +296,7 @@ async function saveWebhook() {
     await loadWebhooks()
   } catch (error: unknown) {
     errorMessages.value = parseErrors(error)
-    if (errorMessages.value.size() === 0) {
+    if (errorMessages.value.size === 0) {
       notificationsStore.addNotification({
         message: 'Failed to save webhook',
         type: 'error',
@@ -404,7 +404,7 @@ async function saveDiscord() {
     await loadDiscordIntegrations()
   } catch (error: unknown) {
     errorMessages.value = parseErrors(error)
-    if (errorMessages.value.size() === 0) {
+    if (errorMessages.value.size === 0) {
       notificationsStore.addNotification({
         message: 'Failed to save discord integration',
         type: 'error',
@@ -675,7 +675,7 @@ async function saveSchedule() {
     await loadSendSchedules()
   } catch (error: unknown) {
     errorMessages.value = parseErrors(error)
-    if (errorMessages.value.size() === 0) {
+    if (errorMessages.value.size === 0) {
       notificationsStore.addNotification({
         type: 'error',
         message: 'Failed to save send schedule',
