@@ -24,29 +24,49 @@ services:
       - redis:/var/lib/redis
     ports:
       - "6379:6379"
-    restart: on-failure
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
 
   api:
     build:
       context: ./api
+    restart: unless-stopped
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     env_file:
       - ./api/.env
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
 
   web:
     build:
       context: ./web
+    restart: unless-stopped
     ports:
       - "3000:3000"
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
 
 volumes:
   redis:
