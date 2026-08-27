@@ -1,10 +1,11 @@
 services:
   postgres:
     image: postgres:alpine
+    env_file:
+      - ./api/.env
     environment:
-      POSTGRES_DB: httpsms
-      POSTGRES_PASSWORD: dbpassword
-      POSTGRES_USER: dbusername
+      POSTGRES_DB: ${POSTGRES_DB:-httpsms}
+      POSTGRES_USER: ${POSTGRES_USER:-httpsms}
     volumes:
       - postgres:/var/lib/postgresql/data
     ports:

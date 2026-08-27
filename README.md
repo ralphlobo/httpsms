@@ -240,6 +240,8 @@ CLOUDFLARE_TURNSTILE_SECRET_KEY=
   When it's finished, you'll be able to access the web UI at http://localhost:3000 and the API at http://localhost:8000
 
 ```bash
+cp api/.env.docker api/.env
+$EDITOR api/.env
 docker compose up --build
 ```
 
@@ -270,6 +272,7 @@ The project includes end-to-end integration tests that validate the complete SMS
 cd tests
 bash generate-firebase-credentials.sh
 export FIREBASE_CREDENTIALS=$(jq -c . firebase-credentials.json)
+export MONGO_INITDB_ROOT_PASSWORD="$(openssl rand -hex 24)"
 docker compose up -d --build --wait
 docker compose wait seed && sleep 2
 go test -v -timeout 120s ./...

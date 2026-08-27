@@ -80,6 +80,7 @@ This creates `firebase-credentials.json` with a throwaway RSA key (the emulator 
 
 ```bash
 export FIREBASE_CREDENTIALS=$(jq -c . firebase-credentials.json)
+export MONGO_INITDB_ROOT_PASSWORD="$(openssl rand -hex 24)"
 ```
 
 ### 3. Start the Stack
@@ -119,6 +120,7 @@ The `-v` flag removes volumes (database data) for a clean slate next run.
 cd tests && \
   bash generate-firebase-credentials.sh && \
   export FIREBASE_CREDENTIALS=$(jq -c . firebase-credentials.json) && \
+  export MONGO_INITDB_ROOT_PASSWORD="$(openssl rand -hex 24)" && \
   docker compose up -d --build --wait && \
   docker compose wait seed && \
   sleep 2 && \
